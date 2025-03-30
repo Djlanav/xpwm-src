@@ -1,4 +1,5 @@
-use crate::windows_wlan::{NetworkManager, NetworkSecurity};
+use crate::windows_wlan::NetworkManager;
+use crate::wlan_enums::NetworkSecurity;
 use godot::prelude::*;
 use std::ptr::null_mut;
 use windows::Win32::Foundation::HANDLE;
@@ -42,19 +43,25 @@ impl WlanAPI {
 
     #[func]
     fn fetch_network_data(&mut self) {
-        match self.network_manager.open_handle() {
-            Ok(()) => {
-                godot_print!("[WLAN] NetworkManager Ready");
-                godot_print!("[WLAN] Scanning for Networks");
+        self.network_manager.open_handle();
+        godot_print!("[WLAN] NetworkManager Ready");
+        godot_print!("[WLAN] Scanning for Networks");
 
-                // TODO: Fix out of bounds panic
-                self.network_manager.fetch_network_data();
-                self.signals().network_data_fetched().emit();
-            }
-            Err(e) => {
-                godot_print!("[WLAN] NetworkManager Failed to Open Client Handle: {:?}", e);
-            }
-        }
+        self.network_manager.fetch_network_data();
+        self.signals().network_data_fetched().emit();
+    }
+
+    #[func]
+    fn scan_networks(&mut self) {
+        self.network_manager.request_scan();
+    }
+
+    #[func]
+    fn refresh_network_data(&mut self) {
+        godot_print!("[WLAN] Refreshing NetworkData");
+
+        self.network_manager.refresh_networks();
+        self.signals().network_data_fetched().emit();
     }
 
     #[func]

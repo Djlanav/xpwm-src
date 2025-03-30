@@ -7,23 +7,6 @@ use std::rc::Rc;
 use std::slice;
 use godot::prelude::*;
 
-#[derive(Clone, GodotConvert, Var, Export)]
-#[godot(via = GString)]
-pub enum NetworkSecurity {
-    Open,
-    WPA,
-    WPA2,
-    WPAPSK,
-    WPA2PSK,
-    Unknown
-}
-
-impl Default for NetworkSecurity {
-    fn default() -> NetworkSecurity {
-        NetworkSecurity::Open
-    }
-}
-
 #[derive(Clone)]
 pub struct Network {
     ssid: Rc<String>,
@@ -97,10 +80,10 @@ impl NetworkManager {
         }
     }
 
-    pub fn open_handle(&mut self) -> Result<(), WIN32_ERROR> {
+    pub fn open_handle(&mut self) {
         if self.is_handle_open {
             godot_print!("[WLAN] Open Handle Already From Client");
-            return Ok(())
+            return;
         }
 
         unsafe {
@@ -110,29 +93,40 @@ impl NetworkManager {
                 &mut self.negotiated_client_version,
                 &mut self.client_handle);
 
-            check_win32(handle_status)?;
+            match check_win32(handle_status) {
+                Ok(_) => godot_print!("[WLAN] Open Handle Ok"),
+                Err(e) => godot_error!("[WLAN] Open Handle Failed To Open Handle: {:?}", e)
+            }
         }
 
         self.is_handle_open = true;
         godot_print!("[WLAN] Client Handle Opened");
-        Ok(())
     }
 
 
     pub fn fetch_network_data(&mut self) {
-        let networks = match self.scan_networks() {
-            Ok(networks) => networks.unwrap(),
+        match self.scan_networks() {
+            Ok(()) => {},
             Err(e) => {
                 godot_error!("[WLAN] Failed to Get Networks: {:?}", e);
                 return;
             }
         };
-
-        self.networks = networks;
     }
 
-    pub fn request_scan(&self) -> Result<(), WIN32_ERROR> {
+    pub fn request_scan(&mut self) {
         godot_print!("[WLAN] Requesting Scan");
+        self.open_handle();
+
+        match self.interface_info {
+            None => {
+                godot_warn!("[WLAN] No Interface Info. Retrieving.");
+                let interfaces = self.get_interfaces();
+                self.retrieve_interface_from_vec(interfaces);
+                godot_print!("[WLAN] Done")
+            }
+            Some(_) => godot_print!("[WLAN] Interface info present. Proceeding."),
+        }
 
         let result = unsafe {
             WlanScan(
@@ -144,33 +138,50 @@ impl NetworkManager {
             )
         };
 
-        check_win32(result)?;
-        Ok(())
+        match check_win32(result) {
+            Ok(_) => godot_print!("[WLAN] Request Scan Ok"),
+            Err(e) => godot_error!("[WLAN] Request Scan Failed: {:?}", e)
+        }
     }
 
-    pub fn scan_networks(&mut self) -> Result<Option<HashMap<Rc<String>, Network>>, WIN32_ERROR> {
+    pub fn refresh_networks(&mut self) {
+        self.networks.clear();
+        let ifo = self.interface_info.unwrap();
+
+        let new_network_list = match self.get_available_networks(&ifo) {
+            Ok(new_network_list) => new_network_list,
+            Err(e) => {
+                godot_error!("[WLAN] Failed to Get Available Networks: {:?}", e);
+                return;
+            }
+        };
+
+        for network in new_network_list {
+            let ssid_length = network.dot11Ssid.uSSIDLength as usize;
+            if ssid_length > 32 {
+                continue;
+            }
+
+            let net = self.construct_network_object(&network, ssid_length);
+            self.networks.insert(net.get_ssid(), net);
+        }
+    }
+
+    pub fn scan_networks(&mut self) -> Result<(), WIN32_ERROR> {
         if !self.is_handle_open {
             godot_error!("[WLAN] A Client Handle Must Be Open to Scan for Networks!");
-            return Ok(None);
+            return Ok(());
         }
 
-        let mut networks_hashmap = HashMap::new();
-        let interfaces = self.get_interfaces()?;
+        let interfaces = self.get_interfaces();
 
         for int_info in interfaces {
             let networks = self.get_available_networks(&int_info)?;
-            let state = convert_wlan_interface_state(int_info.isState);
             let ifo = int_info.clone();
 
-            if let None = self.interface_info {
-                match state {
-                    WlanInterfaceState::Connected => self.interface_info = Some(ifo),
-                    WlanInterfaceState::Disconnected => self.interface_info = Some(ifo),
-                    WlanInterfaceState::Associating => self.interface_info = Some(ifo),
-                    WlanInterfaceState::Authenticating => self.interface_info = Some(ifo),
-                    WlanInterfaceState::Discovering => self.interface_info = Some(ifo),
-                    WlanInterfaceState::Unavailable => continue
-                }
+            let check = self.retrieve_interface(ifo);
+            if !check.unwrap() {
+                continue;
             }
 
             for net in networks {
@@ -179,25 +190,50 @@ impl NetworkManager {
                     continue;
                 }
 
-                let ssid_bytes = &net.dot11Ssid.ucSSID[..ssid_length];
-                let ssid = String::from_utf8_lossy(ssid_bytes);
-
-                let (is_secured, security) = check_security(&net);
-                let signal_strength = check_signal_strength(&net);
-
-                let network = Network::new(ssid.to_string(), is_secured, security, signal_strength);
-                networks_hashmap.insert(network.get_ssid(), network);
+                let network = self.construct_network_object(&net, ssid_length);
+                self.networks.insert(network.get_ssid(), network);
             }
         }
 
-        Ok(Some(networks_hashmap))
+        Ok(())
     }
 
-    fn get_interfaces(&self) -> Result<Vec<WLAN_INTERFACE_INFO>, WIN32_ERROR> {
+    fn construct_network_object(&self, net: &WLAN_AVAILABLE_NETWORK, ssid_length: usize) -> Network {
+        let ssid_bytes = &net.dot11Ssid.ucSSID[..ssid_length];
+        let ssid = String::from_utf8_lossy(ssid_bytes);
+
+        let (is_secured, security) = check_security(&net);
+        let signal_strength = check_signal_strength(&net);
+
+        let network = Network::new(ssid.to_string(), is_secured, security, signal_strength);
+        network
+    }
+
+    pub fn close_handle(&self) -> Result<(), WIN32_ERROR> {
+        if self.is_handle_open {
+            unsafe {
+                let status = WlanCloseHandle(self.client_handle, None);
+                check_win32(status)?;
+            }
+        } else {
+            godot_warn!("[WLAN] Attempted to Close a Non-Open Handle");
+        }
+
+        Ok(())
+    }
+}
+
+
+// Retrieval of data
+impl NetworkManager {
+    fn get_interfaces(&self) -> Vec<WLAN_INTERFACE_INFO> {
         unsafe {
             let mut interface_list_ptr: *mut WLAN_INTERFACE_INFO_LIST = null_mut();
             let enum_result = WlanEnumInterfaces(self.client_handle, None, &mut interface_list_ptr);
-            check_win32(enum_result)?;
+            match check_win32(enum_result) {
+                Ok(_) => godot_print!("[WLAN] Interface List Retrieval Successful"),
+                Err(e) => godot_error!("[WLAN] Failed to Retrieve interfaces List: {:?}", e)
+            }
 
             let interface_list = match NonNull::new(interface_list_ptr) {
                 Some(interface_list) => interface_list,
@@ -212,14 +248,46 @@ impl NetworkManager {
                 interfaces_ptr.cast::<WLAN_INTERFACE_INFO>(),
                 interfaces_len);
 
-            Ok(interfaces.to_vec())
+            interfaces.to_vec()
         }
+    }
+
+    fn retrieve_interface_from_vec(&mut self, interfaces: Vec<WLAN_INTERFACE_INFO>) {
+        for interface in interfaces {
+            let state = convert_wlan_interface_state(interface.isState);
+            let ifo = interface.clone();
+
+            if let None = self.interface_info {
+                if !check_wlan_interface_state(&state, || {
+                    self.interface_info = Some(ifo);
+                    true
+                }) {
+                    continue;
+                }
+            }
+        }
+    }
+
+    fn retrieve_interface(&mut self, interface: WLAN_INTERFACE_INFO) -> Option<bool> {
+        let state = convert_wlan_interface_state(interface.isState);
+        let ifo = interface.clone();
+
+        if let None = self.interface_info {
+            let check = check_wlan_interface_state(&state, || {
+               self.interface_info = Some(ifo);
+                true
+            });
+
+            return Some(check);
+        }
+
+        None
     }
 
     fn get_available_networks(
         &self,
         interface_info: &WLAN_INTERFACE_INFO
-        ) -> Result<Vec<WLAN_AVAILABLE_NETWORK> , WIN32_ERROR>
+    ) -> Result<Vec<WLAN_AVAILABLE_NETWORK> , WIN32_ERROR>
     {
         unsafe {
             let mut network_list_ptr: *mut WLAN_AVAILABLE_NETWORK_LIST = null_mut();
@@ -248,19 +316,6 @@ impl NetworkManager {
 
             Ok(networks.to_vec())
         }
-    }
-
-    pub fn close_handle(&self) -> Result<(), WIN32_ERROR> {
-        if self.is_handle_open {
-            unsafe {
-                let status = WlanCloseHandle(self.client_handle, None);
-                check_win32(status)?;
-            }
-        } else {
-            godot_warn!("[WLAN] Attempted to Close a Non-Open Handle");
-        }
-
-        Ok(())
     }
 }
 
