@@ -1,5 +1,6 @@
 use crate::wlan_enums::*;
 use std::collections::HashMap;
+use std::ffi::c_void;
 use windows::Win32::NetworkManagement::WiFi::*;
 use windows::Win32::Foundation::{ERROR_SUCCESS, HANDLE, WIN32_ERROR};
 use std::ptr::{addr_of, null_mut, NonNull};
@@ -103,6 +104,45 @@ impl NetworkManager {
         godot_print!("[WLAN] Client Handle Opened");
     }
 
+    pub fn wlan_query_interface(&self) -> Option<String>  {
+        let mut data_size: u32 = 0;
+        let mut data_ptr: *mut c_void = null_mut();
+        let mut conn_attribs: Option<&WLAN_CONNECTION_ATTRIBUTES> = None;
+
+        let op_code = wlan_intf_opcode_current_connection;
+        let mut op_type = wlan_opcode_value_type_query_only;
+
+        let ifo = self.interface_info.as_ref().unwrap();
+        unsafe {
+            let query_result = WlanQueryInterface(
+                self.client_handle,
+                &ifo.InterfaceGuid,
+                op_code,
+                None,
+                &mut data_size,
+                &mut data_ptr,
+                Some(&mut op_type),
+            );
+
+            let result = check_win32(query_result);
+            match result {
+                Ok(_) => godot_print!("[WLAN] Query Interface Ok"),
+                Err(e) => {
+                    godot_error!("[WLAN] Query Interface Failed To Query Interface: {:?}", e);
+                    return None
+                }
+            }
+
+            conn_attribs = Some(&*(data_ptr as *const WLAN_CONNECTION_ATTRIBUTES));
+        }
+
+        let conn_unwrapped = conn_attribs.unwrap();
+        let ssid = conn_unwrapped.wlanAssociationAttributes.dot11Ssid;
+        let ssid_raw = &ssid.ucSSID[..ssid.uSSIDLength as usize];
+        let ssid_string = String::from_utf8_lossy(ssid_raw).to_string();
+
+        Some(ssid_string)
+    }
 
     pub fn fetch_network_data(&mut self) {
         match self.scan_networks() {

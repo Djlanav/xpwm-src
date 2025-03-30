@@ -14,9 +14,13 @@ pub struct WlanAPI {
 #[derive(GodotClass)]
 #[class(init, base=Resource)]
 pub struct WiFiNetwork {
+    #[var]
     ssid: GString,
+    #[var]
     secured: bool,
+    #[var]
     network_security: NetworkSecurity,
+    #[var]
     bars: u32
 }
 
@@ -62,6 +66,16 @@ impl WlanAPI {
 
         self.network_manager.refresh_networks();
         self.signals().network_data_fetched().emit();
+    }
+
+    #[func]
+    fn check_connectivity(&self) -> GString {
+        let ssid = match self.network_manager.wlan_query_interface() {
+            Some(ssid) => ssid,
+            None => return GString::new(),
+        };
+
+        GString::from(ssid)
     }
 
     #[func]
