@@ -141,6 +141,10 @@ impl NetworkManager {
         let ssid_raw = &ssid.ucSSID[..ssid.uSSIDLength as usize];
         let ssid_string = String::from_utf8_lossy(ssid_raw).to_string();
 
+        unsafe {
+            godot_print!("[WLAN] Freeing query memory");
+            WlanFreeMemory(data_ptr);
+        }
         Some(ssid_string)
     }
 
@@ -288,7 +292,12 @@ impl NetworkManager {
                 interfaces_ptr.cast::<WLAN_INTERFACE_INFO>(),
                 interfaces_len);
 
-            interfaces.to_vec()
+            let interface_vec = interfaces.to_vec();
+
+            godot_print!("[WLAN] Freeing interfaces list memory");
+            WlanFreeMemory(interface_list_ptr.cast());
+
+            interface_vec
         }
     }
 
@@ -354,7 +363,11 @@ impl NetworkManager {
                 networks_len as usize
             );
 
-            Ok(networks.to_vec())
+            let networks_vec = networks.to_vec();
+            godot_print!("[WLAN] Freeing networks list memory");
+            WlanFreeMemory(network_list_ptr.cast());
+
+            Ok(networks_vec)
         }
     }
 }

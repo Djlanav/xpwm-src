@@ -35,6 +35,10 @@ impl INode for WlanAPI {
             base
         }
     }
+
+    fn exit_tree(&mut self) {
+        self.close_wlan_handle();
+    }
 }
 
 #[godot_api]
