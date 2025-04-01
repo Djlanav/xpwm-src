@@ -5,7 +5,8 @@ edition = "2024"
 
 [dependencies]
 godot = { git = "https://github.com/godot-rust/gdext", branch = "master" }
-windows = { version = "0.61.1", features = ["Win32", "Win32_NetworkManagement", "Win32_NetworkManagement_WiFi"] }
+widestring = "1.2.0"
+windows = { version = "0.61.1", features = ["Win32", "Win32_NetworkManagement", "Win32_NetworkManagement_WiFi", "Win32_NetworkManagement_Ndis"] }
 xml = "0.8.20"
 
 

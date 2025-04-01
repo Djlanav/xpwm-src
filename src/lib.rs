@@ -1,6 +1,8 @@
 mod windows_wlan;
 mod wlan_godot;
 mod wlan_enums;
+mod callbacks;
+mod globals;
 
 use godot::prelude::*;
 

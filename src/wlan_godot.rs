@@ -1,7 +1,10 @@
+use crate::globals;
 use crate::windows_wlan::NetworkManager;
-use crate::wlan_enums::NetworkSecurity;
+use crate::wlan_enums::{ConnectionNotifcation, NetworkSecurity};
 use godot::prelude::*;
 use std::ptr::null_mut;
+use std::sync::TryLockError::{Poisoned, WouldBlock};
+use std::sync::mpsc::TryRecvError::{Disconnected, Empty};
 use windows::Win32::Foundation::HANDLE;
 
 #[derive(GodotClass)]
@@ -47,6 +50,9 @@ impl WlanAPI {
     fn network_data_fetched();
 
     #[signal]
+    fn connection_status_received(status: ConnectionNotifcation);
+
+    #[signal]
     fn funny_signal();
 
     #[func]
@@ -57,6 +63,53 @@ impl WlanAPI {
 
         self.network_manager.fetch_network_data();
         self.signals().network_data_fetched().emit();
+    }
+
+    #[func]
+    fn poll_connection_status(&self) -> Variant {
+        let status_guard = match globals::CONNECTION_NOTIFICATION_CHANNEL.try_lock() {
+            Ok(g) => g,
+            Err(error) => match error {
+                Poisoned(poison_error) => poison_error.into_inner(),
+                WouldBlock => {
+                    godot_print!("[WLAN] Status Is Currently Locked. Continuing.");
+                    return Variant::nil();
+                },
+            },
+        };
+
+        let status = match status_guard.1.try_recv() {
+            Ok(status_enum) => status_enum,
+            Err(error) => {
+                match error {
+                    Empty => {
+                        godot_warn!("[WLAN] Notification Receiver Was Empty");
+                        return Variant::nil();
+                    },
+                    Disconnected => {
+                        godot_error!("[WLAN] Notification Receiver Was Disconnected");
+                        return Variant::nil();
+                    },
+                }
+            },
+        };
+
+        Variant::from(status.to_godot())
+    }
+
+    #[func]
+    fn connect(&self, ssid: GString) {
+        if ssid == GString::from("Linksys775") {
+            let ssid_string = ssid.to_string();
+            self.network_manager.connect_to_known_network(ssid_string.as_str());
+        } else {
+            godot_error!("[WLAN] Can Only Connect To Known Networks At This Time");
+        }
+    }
+
+    #[func]
+    fn disconnect(&self) {
+        self.network_manager.disconnect_from_network();
     }
 
     #[func]

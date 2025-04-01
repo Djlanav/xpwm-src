@@ -27,6 +27,32 @@ pub enum WlanInterfaceState {
     Unavailable,
 }
 
+#[derive(Debug, Clone, GodotConvert, Var, Export)]
+#[godot(via = GString)]
+pub enum ConnectionNotifcation {
+    ConnectionStart,
+    //AuthenticateComplete,
+    ConnectionComplete,
+    ConnectionAttemptFail,
+    Disconnected,
+    Unknown
+}
+
+#[allow(non_upper_case_globals)]
+pub fn convert_connection_notification(code: WLAN_NOTIFICATION_ACM) -> ConnectionNotifcation {
+    let notif = match code {
+        wlan_notification_acm_connection_start => ConnectionNotifcation::ConnectionStart,
+        wlan_notification_acm_connection_complete => ConnectionNotifcation::ConnectionComplete,
+        wlan_notification_acm_disconnected => ConnectionNotifcation::Disconnected,
+        wlan_notification_acm_connection_attempt_fail => ConnectionNotifcation::ConnectionAttemptFail,
+
+        _ => ConnectionNotifcation::Unknown
+    };
+
+    notif
+}
+
+#[allow(non_upper_case_globals)]
 pub fn convert_wlan_interface_state(state: WLAN_INTERFACE_STATE) -> WlanInterfaceState {
     let state_enum = match state {
         wlan_interface_state_connected => WlanInterfaceState::Connected,

@@ -1,6 +1,8 @@
-use crate::wlan_enums::*;
+use crate::{callbacks, wlan_enums::*};
 use std::collections::HashMap;
 use std::ffi::c_void;
+use widestring::U16CString;
+use windows::core::PCWSTR;
 use windows::Win32::NetworkManagement::WiFi::*;
 use windows::Win32::Foundation::{ERROR_SUCCESS, HANDLE, WIN32_ERROR};
 use std::ptr::{addr_of, null_mut, NonNull};
@@ -95,7 +97,10 @@ impl NetworkManager {
                 &mut self.client_handle);
 
             match check_win32(handle_status) {
-                Ok(_) => godot_print!("[WLAN] Open Handle Ok"),
+                Ok(_) => {
+                    godot_print!("[WLAN] Open Handle Ok");
+                    self.register_wlan_notification();
+                },
                 Err(e) => godot_error!("[WLAN] Open Handle Failed To Open Handle: {:?}", e)
             }
         }
@@ -104,6 +109,27 @@ impl NetworkManager {
         godot_print!("[WLAN] Client Handle Opened");
     }
 
+    fn register_wlan_notification(&self) {
+        unsafe {
+            let result = WlanRegisterNotification
+            (
+                self.client_handle, 
+                WLAN_NOTIFICATION_SOURCE_ACM, 
+                false, 
+                Some(callbacks::wlan_acm_notification_callback), 
+                None, 
+                None, 
+                None
+            );
+
+            match check_win32(result) {
+                Ok(_) => godot_print!("[WLAN] ACM Notification Callback Registered"),
+                Err(e) => godot_error!("[WLAN] ACM Notification Callback Registration Failed: {:?}", e),
+            }
+        }
+    }
+
+    #[allow(unused_assignments)]
     pub fn wlan_query_interface(&self) -> Option<String>  {
         let mut data_size: u32 = 0;
         let mut data_ptr: *mut c_void = null_mut();
@@ -146,6 +172,50 @@ impl NetworkManager {
             WlanFreeMemory(data_ptr);
         }
         Some(ssid_string)
+    }
+
+    pub fn connect_to_known_network(&self, ssid: &str) {
+        let profile_name = U16CString::from_str(ssid).unwrap();
+
+        let conn_params = WLAN_CONNECTION_PARAMETERS {
+            wlanConnectionMode: wlan_connection_mode_profile,
+            strProfile: PCWSTR::from_raw(profile_name.as_ptr()),
+            dot11BssType: dot11_BSS_type_infrastructure,
+            pDot11Ssid: null_mut(),
+            pDesiredBssidList: null_mut(),
+            dwFlags: 0
+        };
+        
+        let ifo = self.interface_info.unwrap();
+        let result = unsafe {
+            WlanConnect(self.client_handle, 
+                        &ifo.InterfaceGuid, 
+                        &conn_params, 
+                        None)
+        };
+
+        match check_win32(result) {
+            Ok(_) => godot_print!("[WLAN] Connected to Network {}", ssid),
+            Err(e) => godot_error!("[WLAN] Failed to Connect to Network: {:?}", e),
+        }
+    }
+
+    pub fn disconnect_from_network(&self) {
+        let ifo = self.interface_info.unwrap();
+
+        unsafe {
+            let result = WlanDisconnect
+            (
+                self.client_handle, 
+                &ifo.InterfaceGuid, 
+                None
+            );
+
+            match check_win32(result) {
+                Ok(_) => godot_print!("[WLAN] Disconnected From Network"),
+                Err(error) => godot_error!("[WLAN] Failed To Disconnect From Network: {:?}", error),
+            }
+        }
     }
 
     pub fn fetch_network_data(&mut self) {
