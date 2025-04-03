@@ -11,19 +11,31 @@ use std::slice;
 use godot::prelude::*;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct Network {
     ssid: Rc<String>,
     secured: bool,
+    connected: bool,
     network_security: NetworkSecurity,
+    encryption: EncryptionAlgorithm,
     bars: u32
 }
 
 impl Network {
-    pub fn new(ssid: String, secured: bool, network_security: NetworkSecurity, bars: u32) -> Self {
+    pub fn new(
+        ssid: String, 
+        secured: bool, 
+        connected: bool, 
+        network_security: NetworkSecurity,
+        encryption: EncryptionAlgorithm,
+        bars: u32,) -> Self 
+    {
         Network {
             ssid: Rc::new(ssid),
             secured,
+            connected,
             network_security,
+            encryption,
             bars
         }
     }
@@ -129,11 +141,9 @@ impl NetworkManager {
         }
     }
 
-    #[allow(unused_assignments)]
-    pub fn wlan_query_interface(&self) -> Option<String>  {
+    pub fn check_for_active_connection(&self) -> Option<&WLAN_CONNECTION_ATTRIBUTES> {
         let mut data_size: u32 = 0;
         let mut data_ptr: *mut c_void = null_mut();
-        let mut conn_attribs: Option<&WLAN_CONNECTION_ATTRIBUTES> = None;
 
         let op_code = wlan_intf_opcode_current_connection;
         let mut op_type = wlan_opcode_value_type_query_only;
@@ -150,26 +160,41 @@ impl NetworkManager {
                 Some(&mut op_type),
             );
 
-            let result = check_win32(query_result);
-            match result {
-                Ok(_) => godot_print!("[WLAN] Query Interface Ok"),
+            match check_win32(query_result) {
+                Ok(_) => Some(&*(data_ptr as *const WLAN_CONNECTION_ATTRIBUTES)),
                 Err(e) => {
-                    godot_error!("[WLAN] Query Interface Failed To Query Interface: {:?}", e);
-                    return None
-                }
-            }
+                    if e.0 == 5023 {
+                        godot_warn!("[WLAN] Interface Could Not Query For Active Connection. Are You Disconnected?");
+                        return None;
+                    }
 
-            conn_attribs = Some(&*(data_ptr as *const WLAN_CONNECTION_ATTRIBUTES));
+                    godot_error!("[WLAN] Error In Checking For Active Connection: {:?}", e);
+                    None
+                },
+            }
+        }
+    }
+
+    #[allow(unused_assignments)]
+    pub fn get_connected_network(&self) -> Option<String>  {
+        if !self.is_handle_open || self.client_handle.is_invalid() {
+            godot_error!("[WLAN] Handle Is Either Not Open Or Invalid");
+            return None;
         }
 
-        let conn_unwrapped = conn_attribs.unwrap();
-        let ssid = conn_unwrapped.wlanAssociationAttributes.dot11Ssid;
+        // TODO: Checking connection status separation of concerns
+        let conn_attribs = match self.check_for_active_connection() {
+            Some(attribs) => attribs,
+            None => return None,
+        };
+
+        let ssid = conn_attribs.wlanAssociationAttributes.dot11Ssid;
         let ssid_raw = &ssid.ucSSID[..ssid.uSSIDLength as usize];
         let ssid_string = String::from_utf8_lossy(ssid_raw).to_string();
 
         unsafe {
             godot_print!("[WLAN] Freeing query memory");
-            WlanFreeMemory(data_ptr);
+            WlanFreeMemory(addr_of!(*conn_attribs) as *const c_void);
         }
         Some(ssid_string)
     }
@@ -200,6 +225,17 @@ impl NetworkManager {
         }
     }
 
+    pub fn connect_to_unknown_network(&self, ssid: &str, password: &str) {
+        let ssid_bytes = ssid.as_bytes();
+        let mut dot11_ssid = DOT11_SSID {
+            uSSIDLength: ssid_bytes.len() as u32,
+            ucSSID: [0; 32]
+        };
+        dot11_ssid.ucSSID[..ssid_bytes.len()].copy_from_slice(ssid_bytes);
+
+
+    }
+
     pub fn disconnect_from_network(&self) {
         let ifo = self.interface_info.unwrap();
 
@@ -222,7 +258,7 @@ impl NetworkManager {
         match self.scan_networks() {
             Ok(()) => {},
             Err(e) => {
-                godot_error!("[WLAN] Failed to Get Networks: {:?}", e);
+                godot_error!("[WLAN] Failed To Get Networks: {:?}", e);
                 return;
             }
         };
@@ -237,9 +273,9 @@ impl NetworkManager {
                 godot_warn!("[WLAN] No Interface Info. Retrieving.");
                 let interfaces = self.get_interfaces();
                 self.retrieve_interface_from_vec(interfaces);
-                godot_print!("[WLAN] Done")
+                godot_print!("[WLAN] Got Interface Info. Continuing With Scan");
             }
-            Some(_) => godot_print!("[WLAN] Interface info present. Proceeding."),
+            Some(_) => godot_print!("[WLAN] Interface Info Present. Proceeding."),
         }
 
         let result = unsafe {
@@ -318,8 +354,14 @@ impl NetworkManager {
 
         let (is_secured, security) = check_security(&net);
         let signal_strength = check_signal_strength(&net);
+        let net_encryption = check_encryption(&net);
 
-        let network = Network::new(ssid.to_string(), is_secured, security, signal_strength);
+        let network = Network::new(
+            ssid.to_string(), 
+            is_secured, false, 
+            security,
+            net_encryption,
+            signal_strength);
         network
     }
 
@@ -377,9 +419,8 @@ impl NetworkManager {
             let ifo = interface.clone();
 
             if let None = self.interface_info {
-                if !check_wlan_interface_state(&state, || {
+                if let None =  check_wlan_interface_state(&state, || {
                     self.interface_info = Some(ifo);
-                    true
                 }) {
                     continue;
                 }
@@ -392,12 +433,13 @@ impl NetworkManager {
         let ifo = interface.clone();
 
         if let None = self.interface_info {
-            let check = check_wlan_interface_state(&state, || {
+            match check_wlan_interface_state(&state, || {
                self.interface_info = Some(ifo);
-                true
-            });
-
-            return Some(check);
+               true
+            }) {
+                Some(result) => return Some(result),
+                None => return None,
+            }
         }
 
         None
@@ -440,20 +482,6 @@ impl NetworkManager {
             Ok(networks_vec)
         }
     }
-}
-
-fn check_security(network: &WLAN_AVAILABLE_NETWORK) -> (bool, NetworkSecurity) {
-    let is_secured = network.bSecurityEnabled.as_bool();
-    let security_type = match network.dot11DefaultAuthAlgorithm {
-        DOT11_AUTH_ALGO_80211_OPEN => NetworkSecurity::Open,
-        DOT11_AUTH_ALGO_WPA => NetworkSecurity::WPA,
-        DOT11_AUTH_ALGO_WPA_PSK => NetworkSecurity::WPAPSK,
-        DOT11_AUTH_ALGO_RSNA => NetworkSecurity::WPA2,
-        DOT11_AUTH_ALGO_RSNA_PSK => NetworkSecurity::WPA2PSK,
-        _ => NetworkSecurity::Unknown
-    };
-
-    (is_secured, security_type)
 }
 
 fn check_signal_strength(network: &WLAN_AVAILABLE_NETWORK) -> u32 {

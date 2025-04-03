@@ -307,19 +307,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "xml"
-version = "0.8.20"
+name = "xmlwriter"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ede1c99c55b4b3ad0349018ef0eccbe954ce9c342334410707ee87177fcf2ab4"
-dependencies = [
- "xml-rs",
-]
-
-[[package]]
-name = "xml-rs"
-version = "0.8.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5b940ebc25896e71dd073bad2dbaa2abfe97b0a391415e22ad1326d9c54e3c4"
+checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xpwm"
@@ -328,5 +319,5 @@ dependencies = [
  "godot",
  "widestring",
  "windows",
- "xml",
+ "xmlwriter",
 ]
