@@ -69,7 +69,7 @@ pub struct NetworkManager {
 impl Drop for NetworkManager {
     fn drop(&mut self) {
         match self.close_handle() {
-            Ok(_) => godot_print!("[WLAN] NetworkManager Done"),
+            Ok(_) => godot_print!("[WLAN] Client Handle Closed. NetworkManager Done"),
             Err(e) => {
                 godot_error!("[WLAN] NetworkManager Failed To Close Client Handle: {:?}", e);
             }
