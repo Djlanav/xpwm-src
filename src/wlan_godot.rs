@@ -203,10 +203,13 @@ impl WlanAPI {
     }
 
     #[func]
-    fn connect(&self, ssid: GString) {
+    fn connect(&self, ssid: GString, password: GString) {
         let ssid_string = ssid.to_string();
         if self.known_networks.contains(&ssid_string) {
             self.network_manager.connect_to_known_network(ssid_string.as_str());
+        } else {
+            let password_string = password.to_string();
+            self.network_manager.connect_to_unknown_network(ssid_string.as_str(), password_string.as_str());
         }
     }
 
