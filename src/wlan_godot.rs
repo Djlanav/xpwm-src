@@ -132,7 +132,7 @@ impl WlanAPI {
             },
         };
 
-        godot_print!("Notification Receiver Returning Status Data");
+        //godot_print!("Notification Receiver Returning Status Data");
         Variant::from(status.to_godot())
     }
 
@@ -203,12 +203,12 @@ impl WlanAPI {
     }
 
     #[func]
-    fn connect(&self, ssid: GString, password: GString) {
+    fn connect(&self, ssid: GString, args: Dictionary) {
         let ssid_string = ssid.to_string();
         if self.known_networks.contains(&ssid_string) {
             self.network_manager.connect_to_known_network(ssid_string.as_str());
         } else {
-            let password_string = password.to_string();
+            let password_string = args.at("password").to::<GString>().to_string();
             self.network_manager.connect_to_unknown_network(ssid_string.as_str(), password_string.as_str());
         }
     }
@@ -276,6 +276,15 @@ impl WlanAPI {
     #[allow(unused)]
     fn check_network_connectivity(&self, _ssid: GString) {
         todo!();
+    }
+
+    #[func]
+    fn is_known_network(&self, ssid: GString) -> bool {
+        if self.known_networks.contains(&ssid.to_string()) {
+            true
+        } else {
+            false
+        }
     }
 
     #[func]
