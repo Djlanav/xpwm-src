@@ -73,9 +73,9 @@ pub fn check_encryption(network: &WLAN_AVAILABLE_NETWORK) -> EncryptionAlgorithm
 #[godot(via = GString)]
 pub enum ConnectionNotifcation {
     ConnectionStart,
-    //AuthenticateComplete,
     ConnectionComplete,
     ConnectionAttemptFail,
+    InvalidPassword,
     Disconnected,
     Unknown
 }
@@ -97,6 +97,13 @@ pub fn convert_connection_notification(code: WLAN_NOTIFICATION_ACM) -> Connectio
     };
 
     notif
+}
+
+pub fn convert_msm_notification_reason(reason_code: u32) -> ConnectionNotifcation {
+    match reason_code {
+        11 => ConnectionNotifcation::InvalidPassword,
+        _ => ConnectionNotifcation::Unknown
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

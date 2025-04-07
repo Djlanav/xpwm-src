@@ -1,3 +1,5 @@
+pub mod wlan;
+
 use godot::prelude::*;
 use widestring::U16CString;
 use windows::{core::PCWSTR, Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK}};

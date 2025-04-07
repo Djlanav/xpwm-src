@@ -131,7 +131,7 @@ impl NetworkManager {
             let result = WlanRegisterNotification
             (
                 self.client_handle, 
-                WLAN_NOTIFICATION_SOURCE_ACM, 
+                WLAN_NOTIFICATION_SOURCE_ACM | WLAN_NOTIFICATION_SOURCE_MSM, 
                 false, 
                 Some(callbacks::wlan_acm_notification_callback), 
                 None, 
@@ -204,6 +204,8 @@ impl NetworkManager {
     }
 
     pub fn connect_to_known_network(&self, ssid: &str) {
+        godot_print!("[WLAN] Connecting To Known Network: {}", ssid);
+
         let profile_name = U16CString::from_str(ssid).unwrap();
         let conn_params = WLAN_CONNECTION_PARAMETERS {
             wlanConnectionMode: wlan_connection_mode_profile,
@@ -223,12 +225,14 @@ impl NetworkManager {
         };
 
         match check_win32(result) {
-            Ok(_) => godot_print!("[WLAN] Connected to Network {}", ssid),
+            Ok(_) => godot_print!("[WLAN] Connected to Network: {}", ssid),
             Err(e) => godot_error!("[WLAN] Failed to Connect to Network: {:?}", e),
         }
     }
 
     pub fn connect_to_unknown_network(&self, ssid: &str, password: &str) {
+        godot_print!("[WLAN] Connecting To Unknown Network: {}", ssid);
+
         let connecting_network = self.networks.get(&ssid.to_string()).unwrap();
         let profile = generate_network_profile_xml(ssid, password, &connecting_network.get_encryption(), &connecting_network.get_security());
 
@@ -265,6 +269,7 @@ impl NetworkManager {
     }
 
     pub fn disconnect_from_network(&self) {
+        godot_print!("[WLAN] Disconnecting From Network");
         let ifo = self.interface_info.unwrap();
 
         unsafe {
