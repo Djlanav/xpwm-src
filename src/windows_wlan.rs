@@ -1,7 +1,8 @@
-use crate::profile_management::generate_network_profile_xml;
+use crate::windows_api::{convert_string_to_u16cstring, convert_u16_slice_to_u16cstring, wlan};
 use crate::{callbacks, wlan_enums::*};
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::mem::ManuallyDrop;
 use widestring::U16CString;
 use windows::core::PCWSTR;
 use windows::Win32::NetworkManagement::WiFi::*;
@@ -180,6 +181,43 @@ impl NetworkManager {
         }
     }
 
+    pub fn check_for_windows_profiles(&self) -> Option<(String, bool)> {
+        let profiles = match self.get_profile_list() {
+            Some(list) => list,
+            None => {
+                godot_error!("[WLAN] Failed To Get Profile List");
+                return None;
+            },
+        };
+
+        let client_handle = self.client_handle;
+        let guid = self.interface_info.unwrap().InterfaceGuid;
+
+        for profile in profiles {
+            let u16_cstring = match convert_u16_slice_to_u16cstring(&profile.strProfileName) {
+                Some(cstring) => cstring,
+                None => return None,
+            };
+
+            let retrieved_profile = match wlan::get_profile(client_handle, &guid, &u16_cstring) {
+                Ok(ret) => ret.to_string().unwrap(),
+                Err(error) => {
+                    godot_error!("[WLAN] Failed To Get Profile: {:?}", error);
+                    return None;
+                },
+            };
+            
+            let check = retrieved_profile.contains("<connectionMode>auto</connectionMode");
+            if check {
+                return Some((u16_cstring.to_string().unwrap(), check));
+            } else {
+                return None;
+            }
+        }
+
+        None
+    }
+
     #[allow(unused_assignments)]
     pub fn get_connected_network(&self) -> Option<String>  {
         if !self.is_handle_open || self.client_handle.is_invalid() {
@@ -217,56 +255,70 @@ impl NetworkManager {
         };
         
         let ifo = self.interface_info.unwrap();
-        let result = unsafe {
-            WlanConnect(self.client_handle, 
-                        &ifo.InterfaceGuid, 
-                        &conn_params, 
-                        None)
-        };
-
-        match check_win32(result) {
+        match wlan::connect(self.client_handle, &ifo.InterfaceGuid, &conn_params) {
             Ok(_) => godot_print!("[WLAN] Connected to Network: {}", ssid),
             Err(e) => godot_error!("[WLAN] Failed to Connect to Network: {:?}", e),
         }
     }
 
-    pub fn connect_to_unknown_network(&self, ssid: &str, password: &str) {
-        godot_print!("[WLAN] Connecting To Unknown Network: {}", ssid);
+    // TESTING PURPOSES
+    pub fn get_network(&self, ssid: &str) -> &Network {
+        let network = self.networks.get(&ssid.to_string()).unwrap();
+        network
+    }
 
-        let connecting_network = self.networks.get(&ssid.to_string()).unwrap();
-        let profile = generate_network_profile_xml(ssid, password, &connecting_network.get_encryption(), &connecting_network.get_security());
+    pub fn set_wlan_profile(&self, profile: &String) {
+        let ifo = self.interface_info.unwrap().InterfaceGuid;
+        let profile_u16 = convert_string_to_u16cstring(profile).unwrap();
 
-        let ifo = self.interface_info.as_ref().unwrap();
-        let mut error_code = 0;
-        let profile = match U16CString::from_str(profile.as_str()) {
-            Ok(profile) => profile,
+        match wlan::set_profile(self.client_handle, &ifo, &profile_u16, true) {
+            Ok(_) => godot_print!("[DEBUG] Profile Was Successfully Set"),
             Err(error) => {
-                godot_error!("[WLAN] Failed To Convert XML Profile String: {}", error);
+                godot_error!("[DEBUG] Failed To Set Profile: {:?}", error);
                 return;
             },
         };
-
-        let result = unsafe {
-            WlanSetProfile
-            (
-                self.client_handle, 
-                &ifo.InterfaceGuid, 
-                0, 
-                PCWSTR::from_raw(profile.as_ptr()), 
-                PCWSTR::null(), 
-                true, 
-                None, 
-                &mut error_code
-            )
-        };
-
-        if let Err(error) = check_win32(result) {
-            godot_error!("[WLAN] Failed To Set Profile For Network: {:?}", error);
-            return;
-        }
-
-        self.connect_to_known_network(ssid);
     }
+
+    // ========================
+    // Purpose: Create a profile for an unknown network and connect to it
+    // ========================
+    // pub fn connect_to_unknown_network(&self, ssid: &str, password: &str) {
+    //     godot_print!("[WLAN] Connecting To Unknown Network: {}", ssid);
+
+    //     let connecting_network = self.networks.get(&ssid.to_string()).unwrap();
+    //     let profile = generate_network_profile_xml(ssid, password, &connecting_network.get_encryption(), &connecting_network.get_security());
+
+    //     let ifo = self.interface_info.as_ref().unwrap();
+    //     let profile = match convert_string_to_u16cstring(&profile) {
+    //         Some(string) => string,
+    //         None => return,
+    //     };
+
+    //     if let Err(error) = wlan::set_profile(self.client_handle, &ifo.InterfaceGuid, &profile, true) {
+    //         godot_error!("[WLAN] Failed To Set Network Profile: {:?}", error);
+    //         return;
+    //     }
+
+    //     let profile_name = match convert_str_to_u16cstring(ssid) {
+    //         Some(string) => string,
+    //         None => return,
+    //     };
+    //     let conn_params = WLAN_CONNECTION_PARAMETERS {
+    //         wlanConnectionMode: wlan_connection_mode_profile,
+    //         strProfile: PCWSTR::from_raw(profile_name.as_ptr()),
+    //         dot11BssType: dot11_BSS_type_infrastructure,
+    //         pDot11Ssid: null_mut(),
+    //         pDesiredBssidList: null_mut(),
+    //         dwFlags: 0
+    //     };
+
+    //     let ifo = self.interface_info.unwrap();
+    //     match wlan::connect(self.client_handle, &ifo.InterfaceGuid, &conn_params) {
+    //         Ok(_) => godot_print!("[WLAN] Connected to New Network: {}", ssid),
+    //         Err(e) => godot_error!("[WLAN] Failed to Connect to Network: {:?}", e),
+    //     }
+    // }
 
     pub fn disconnect_from_network(&self) {
         godot_print!("[WLAN] Disconnecting From Network");
@@ -415,6 +467,31 @@ impl NetworkManager {
 
 // Retrieval of data
 impl NetworkManager {
+    pub fn get_profile_list(&self) -> Option<Vec<WLAN_PROFILE_INFO>> {
+        let ifo = self.interface_info.as_ref().unwrap();
+
+        let profile_list = match wlan::get_profile_list(self.client_handle, &ifo.InterfaceGuid) {
+            Ok(result) => result,
+            Err(error) => {
+                godot_error!("[WLAN] Failed To Get Profile List: {:?}", error);
+                return None;
+            },
+        };
+
+        let list_length = profile_list.dwNumberOfItems;
+        let info_ptr = addr_of!(profile_list.ProfileInfo);
+        let info_slice = unsafe {
+            slice::from_raw_parts(info_ptr.cast::<WLAN_PROFILE_INFO>(), list_length as usize)
+        }.to_vec();
+
+        unsafe {
+            let list_box = ManuallyDrop::into_inner(profile_list);
+            let raw_ptr = Box::into_raw(list_box);
+            WlanFreeMemory(raw_ptr as _);
+        }
+        Some(info_slice)
+    }
+
     fn get_interfaces(&self) -> Vec<WLAN_INTERFACE_INFO> {
         unsafe {
             let mut interface_list_ptr: *mut WLAN_INTERFACE_INFO_LIST = null_mut();

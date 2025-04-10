@@ -77,7 +77,8 @@ pub enum ConnectionNotifcation {
     ConnectionAttemptFail,
     InvalidPassword,
     Disconnected,
-    Unknown
+    Unknown,
+    Error
 }
 
 impl Default for NetworkSecurity {
@@ -99,9 +100,12 @@ pub fn convert_connection_notification(code: WLAN_NOTIFICATION_ACM) -> Connectio
     notif
 }
 
-pub fn convert_msm_notification_reason(reason_code: u32) -> ConnectionNotifcation {
-    match reason_code {
-        11 => ConnectionNotifcation::InvalidPassword,
+pub fn convert_msm_notification(notif_code: u32, reason_code: u32) -> ConnectionNotifcation {
+    match notif_code {
+        11 => match reason_code {
+            0x1003 => ConnectionNotifcation::InvalidPassword,
+            _ => ConnectionNotifcation::Unknown
+        },
         _ => ConnectionNotifcation::Unknown
     }
 }

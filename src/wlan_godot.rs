@@ -1,4 +1,6 @@
 use crate::globals;
+use crate::profile_management::generate_network_profile_xml;
+use crate::windows_api::convert_u16_slice_to_string;
 use crate::windows_wlan::NetworkManager;
 use crate::wlan_enums::{ConnectionNotifcation, NetworkSecurity, NotificationState, WlanInterfaceState};
 use godot::prelude::*;
@@ -16,7 +18,7 @@ pub struct WlanAPI {
     network_manager: NetworkManager,
     notif_state: NotificationState,
     interface_state: WlanInterfaceState,
-    known_networks: Vec<String>,
+    known_networks: Array<GString>,
     base: Base<Object>
 }
 
@@ -42,7 +44,7 @@ impl IObject for WlanAPI {
             network_manager: NetworkManager::new(HANDLE(null_mut()), 2),
             notif_state: NotificationState::default(),
             interface_state: WlanInterfaceState::default(),
-            known_networks: Vec::new(),
+            known_networks: Array::new(),
             base
         }
     }
@@ -54,10 +56,23 @@ impl WlanAPI {
     fn network_data_fetched();
 
     #[signal]
-    fn connection_status_received(status: ConnectionNotifcation);
+    fn windows_profiles_found(ssid: GString);
+
+    // Connection Status Signals
+    #[signal]
+    fn connection_start();
 
     #[signal]
-    fn funny_signal();
+    fn connection_complete();
+
+    #[signal]
+    fn connection_attempt_fail();
+
+    #[signal]
+    fn invalid_password();
+
+    #[signal]
+    fn disconnected();
 
     #[cfg(debug_assertions)]
     #[func]
@@ -76,30 +91,33 @@ impl WlanAPI {
     }
 
     #[func]
-    fn poll_connection_status(&mut self) -> Variant {
+    fn poll_connection_status(&mut self) {
         let status_guard = match globals::CONNECTION_NOTIFICATION_CHANNEL.try_lock() {
             Ok(g) => g,
             Err(error) => match error {
                 Poisoned(poison_error) => poison_error.into_inner(),
                 WouldBlock => {
                     godot_warn!("[WLAN] Status Is Currently Locked. Continuing.");
-                    return Variant::nil();
+                    return;
                 },
             },
         };
 
-        let status = match status_guard.1.try_recv() {
+        match status_guard.1.try_recv() {
             Ok(status_enum) => {
                 match status_enum {
                     ConnectionNotifcation::ConnectionStart => {
                         godot_print!("Got Data From Notification Receiver: {:?}", status_enum);
+                        self.signals().connection_start().emit();
                     }
                     ConnectionNotifcation::ConnectionComplete => { 
                         godot_print!("Got Data From Notification Receiver: {:?}", status_enum);
+                        self.signals().connection_complete().emit();
                         self.interface_state = WlanInterfaceState::Connected 
                     },
                     ConnectionNotifcation::Disconnected => {
                         godot_print!("Got Data From Notification Receiver: {:?}", status_enum);
+                        self.signals().disconnected().emit();
                         self.interface_state = WlanInterfaceState::Disconnected
                     },
                     ConnectionNotifcation::Unknown => self.interface_state = WlanInterfaceState::Unavailable,
@@ -114,26 +132,23 @@ impl WlanAPI {
                         if let NotificationState::Empty = self.notif_state {
                             godot_warn!("[WLAN] Receiver Was Empty");
                             self.notif_state = NotificationState::StateKnown;
-                            return Variant::nil();
+                            return;
                         }
 
-                        return Variant::nil();
+                        return;
                     },
                     Disconnected => {
                         if let NotificationState::Disconnected = self.notif_state {
                             godot_error!("[WLAN] Notification Receiver Was Disconnected");
                             self.notif_state = NotificationState::StateKnown;
-                            return Variant::nil();
+                            return;
                         }
 
-                        return Variant::nil();
+                        return;
                     },
                 }
             },
         };
-
-        //godot_print!("Notification Receiver Returning Status Data");
-        Variant::from(status.to_godot())
     }
 
     #[func]
@@ -172,7 +187,7 @@ impl WlanAPI {
             Err(error) => godot_error!("[SYSTEM] Failed To Write Data To 'known_networks.txt'. Error: {}", error),
         };
 
-        self.known_networks.push(ssid_string);
+        self.known_networks.push(&GString::from(ssid_string));
     }
 
     #[func]
@@ -193,23 +208,56 @@ impl WlanAPI {
             },
         };
 
-        let s: Vec<String> = known_networks
+        let s: Vec<GString> = known_networks
         .lines()
         .map(|network| network.trim().to_string())
         .filter(|network| !network.is_empty())
+        .map(|s| GString::from(s))
         .collect();
 
-        self.known_networks = s;
+        self.known_networks = Array::from(s.as_slice());
     }
 
     #[func]
-    fn connect(&self, ssid: GString, args: Dictionary) {
+    fn connect(&self, ssid: GString) {
         let ssid_string = ssid.to_string();
-        if self.known_networks.contains(&ssid_string) {
-            self.network_manager.connect_to_known_network(ssid_string.as_str());
-        } else {
-            let password_string = args.at("password").to::<GString>().to_string();
-            self.network_manager.connect_to_unknown_network(ssid_string.as_str(), password_string.as_str());
+        self.network_manager.connect_to_known_network(&ssid_string);
+    }
+
+    #[func]
+    fn generate_profile(&self, ssid: GString, password: GString) {
+        let (ssid_string, password_string) = (ssid.to_string(), password.to_string());
+        let network = self.network_manager.get_network(ssid.to_string().as_str());
+
+        let profie = generate_network_profile_xml(ssid_string.as_str(), password_string.as_str(), &network.get_encryption(), &network.get_security());
+        self.network_manager.set_wlan_profile(&profie);
+    }
+
+    #[func]
+    fn check_for_matching_profile(&self, ssid: GString) -> bool {
+        let profiles = match self.network_manager.get_profile_list() {
+            Some(list) => list,
+            None => {
+                godot_error!("[WLAN] Failed To Retrieve Profile List");
+                return false;
+            },
+        };
+
+        let match_found = profiles.iter().any(|p| {
+            let rust_string = convert_u16_slice_to_string(&p.strProfileName);
+            let string = GString::from(rust_string);
+
+            ssid == string
+        });
+
+        match_found
+    }
+
+    #[func]
+    fn check_for_windows_profiles(&mut self) {
+        if let Some((ssid, _)) = self.network_manager.check_for_windows_profiles() {
+            let ssid_gstring = GString::from(ssid);
+            self.signals().windows_profiles_found().emit(ssid_gstring);
         }
     }
 

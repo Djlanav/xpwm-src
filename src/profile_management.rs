@@ -34,9 +34,11 @@ pub fn generate_network_profile_xml(
             write_element_preserve_white_spaces(&mut writer, "hex", ssid_hex.as_str());
             write_element_preserve_white_spaces(&mut writer, "name", ssid);
         writer.end_element(); // </SSID>
+        write_element_preserve_white_spaces(&mut writer, "nonBroadcast", "false");
     writer.end_element(); // <SSIDConfig>
     write_element_preserve_white_spaces(&mut writer, "connectionType", "ESS");
-    write_element_preserve_white_spaces(&mut writer, "connectionMode", "auto");
+    write_element_preserve_white_spaces(&mut writer, "connectionMode", "manual");
+    write_element_preserve_white_spaces(&mut writer, "autoSwitch", "false");
     writer.start_element("MSM");
         writer.start_element("security");
             writer.start_element("authEncryption");
@@ -49,11 +51,6 @@ pub fn generate_network_profile_xml(
             }
         writer.end_element(); // </security>
     writer.end_element(); // </MSM>
-
-    writer.start_element("MacRandomization");
-    writer.write_attribute("xmlns", "http://www.microsoft.com/networking/WLAN/profile/v3");
-        write_element_preserve_white_spaces(&mut writer, "enableRandomization", "false");
-    writer.end_element();
     
     writer.end_document() // </WLANProfile>
 
