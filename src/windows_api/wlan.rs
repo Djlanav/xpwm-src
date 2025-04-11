@@ -1,14 +1,75 @@
 use godot::prelude::*;
+use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::ptr::null_mut;
 
 use widestring::{U16CString, U16String};
 use windows::Win32::Foundation::WIN32_ERROR;
-use windows::Win32::NetworkManagement::WiFi::{WlanConnect, WlanDeleteProfile, WlanGetProfile, WlanGetProfileList, WlanReasonCodeToString, WlanSetProfile, WLAN_CONNECTION_PARAMETERS};
+use windows::Win32::NetworkManagement::WiFi::{WlanConnect, WlanDeleteProfile, WlanDisconnect, WlanGetProfile, WlanGetProfileList, WlanQueryInterface, WlanReasonCodeToString, WlanRegisterNotification, WlanScan, WlanSetProfile, L2_NOTIFICATION_DATA, WLAN_CONNECTION_ATTRIBUTES, WLAN_CONNECTION_PARAMETERS, WLAN_INTF_OPCODE, WLAN_NOTIFICATION_SOURCES, WLAN_OPCODE_VALUE_TYPE};
 use windows::Win32::{Foundation::HANDLE, NetworkManagement::WiFi::WLAN_PROFILE_INFO_LIST};
 use windows::core::{GUID, PCWSTR, PWSTR};
 
 use crate::windows_wlan::check_win32;
+
+pub enum WlanError {
+    Error(String),
+    Win32Error(WIN32_ERROR)
+}
+
+pub fn register_notification
+(
+    client_handle: HANDLE, 
+    source: WLAN_NOTIFICATION_SOURCES, 
+    ignore_dupes: bool, 
+    callback: Option<unsafe extern "system" fn(*mut L2_NOTIFICATION_DATA, *mut c_void)>,
+) {
+    let result = unsafe {
+        WlanRegisterNotification(client_handle, source, ignore_dupes, callback, None, None, None)
+    };
+
+    if let Err(error) = check_win32(result) {
+        godot_error!("[WLAN] Failed To Register Notification Callback: {:?}", error);
+        return;
+    }
+}
+
+pub fn scan(client_handle: HANDLE, interface_guid: &GUID) {
+    let result = unsafe {
+        WlanScan(client_handle, interface_guid, None, None, None)
+    };
+
+    if let Err(error) = check_win32(result) {
+        godot_error!("[WLAN] Request Scan Failed: {:?}", error);
+    } else {
+        godot_print!("[WLAN] Scan Request Ok");
+    }
+}
+
+pub fn query_interface<'a>(
+    client_handle: HANDLE, 
+    interface_guid: &'a GUID, 
+    opcode: WLAN_INTF_OPCODE, 
+    size: &mut u32, 
+    opcode_type: &mut WLAN_OPCODE_VALUE_TYPE
+) -> Result<Option<&'a WLAN_CONNECTION_ATTRIBUTES>, WlanError> {
+    let mut data_ptr: *mut c_void = null_mut();
+    
+    let result = unsafe {
+        WlanQueryInterface(client_handle, interface_guid, opcode, None, size, &mut data_ptr, Some(opcode_type))
+    };
+
+    if result != 0 {
+        return Err(WlanError::Win32Error(WIN32_ERROR(result)));
+    }
+
+    unsafe {
+        if data_ptr.is_null() {
+            return Err(WlanError::Error("[WLAN] Failed To Query Interface. Data Pointer Was Null.".to_string()));
+        } else {
+            return Ok(Some(&*(data_ptr as *const WLAN_CONNECTION_ATTRIBUTES)));
+        }
+    }
+}
 
 pub fn get_profile_list(client_handle: HANDLE, interface_guid: &GUID) -> Result<ManuallyDrop<Box<WLAN_PROFILE_INFO_LIST>>, WIN32_ERROR> {
     let mut list_ptr: *mut WLAN_PROFILE_INFO_LIST = null_mut();
@@ -139,4 +200,16 @@ pub fn connect(client_handle: HANDLE, interface_guid: &GUID, connection_params: 
     }
 
     Ok(())
+}
+
+pub fn disconnect(client_handle: HANDLE, interface_guid: &GUID) {
+    let result = unsafe {
+        WlanDisconnect(client_handle, interface_guid, None)
+    };
+
+    if let Err(error) = check_win32(result) {
+        godot_error!("[WLAN] Failed To Disconnect From Network {:?}", error);
+    } else {
+        godot_print!("[WLAN] Disconnected From Network");
+    }
 }

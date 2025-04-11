@@ -1,6 +1,6 @@
 use crate::globals;
 use crate::profile_management::generate_network_profile_xml;
-use crate::windows_api::convert_u16_slice_to_string;
+use crate::windows_api::{convert_string_to_u16cstring, convert_u16_slice_to_string, wlan};
 use crate::windows_wlan::NetworkManager;
 use crate::wlan_enums::{ConnectionNotifcation, NetworkSecurity, NotificationState, WlanInterfaceState};
 use godot::prelude::*;
@@ -78,6 +78,11 @@ impl WlanAPI {
     #[func]
     fn test_xml_data(ssid: GString) {
         globals::save_xml_to_disk(ssid.to_string().as_str());
+    }
+
+    #[func]
+    fn initialize_network_manager(&mut self) {
+        self.network_manager.init();
     }
 
     #[func]
@@ -235,7 +240,9 @@ impl WlanAPI {
 
     #[func]
     fn check_for_matching_profile(&self, ssid: GString) -> bool {
-        let profiles = match self.network_manager.get_profile_list() {
+        let ifo = self.network_manager.get_interface_info().unwrap();
+
+        let profiles = match self.network_manager.get_profile_list(ifo) {
             Some(list) => list,
             None => {
                 godot_error!("[WLAN] Failed To Retrieve Profile List");
@@ -255,10 +262,27 @@ impl WlanAPI {
 
     #[func]
     fn check_for_windows_profiles(&mut self) {
-        if let Some((ssid, _)) = self.network_manager.check_for_windows_profiles() {
-            let ssid_gstring = GString::from(ssid);
-            self.signals().windows_profiles_found().emit(ssid_gstring);
+        let ifo = self.network_manager.get_interface_info().unwrap();
+
+        if let Some(profile_list) = self.network_manager.get_profile_list(ifo) {
+            if let Some((ssid, _)) = self.network_manager.check_for_windows_profiles(&profile_list) {
+                let ssid_gstring = GString::from(ssid);
+                self.signals().windows_profiles_found().emit(ssid_gstring);
+            }
         }
+    }
+
+    #[func]
+    fn delete_profile(&self, ssid: String) {
+        let handle = self.network_manager.get_client_handle();
+        let ifo = self.network_manager.get_interface_info().unwrap();
+
+        let wide_ssid = match convert_string_to_u16cstring(&ssid) {
+            Some(wide) => wide,
+            None => return
+        };
+
+        wlan::delete_profile(handle, &ifo.InterfaceGuid, &wide_ssid);
     }
 
     #[func]

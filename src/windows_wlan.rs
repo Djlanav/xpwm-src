@@ -87,6 +87,14 @@ impl NetworkManager {
     pub fn get_networks(&self) -> HashMap<Rc<String>, Network> {
         self.networks.clone()
     }
+
+    pub fn get_client_handle(&self) -> HANDLE {
+        self.client_handle.clone()
+    }
+
+    pub fn get_interface_info(&self) -> Option<&WLAN_INTERFACE_INFO> {
+        self.interface_info.as_ref()
+    }
 }
 
 impl NetworkManager {
@@ -99,6 +107,11 @@ impl NetworkManager {
             client_version,
             negotiated_client_version: 0,
         }
+    }
+
+    pub fn init(&mut self) {
+        self.open_handle();
+        self.initialize_interface_info();
     }
 
     pub fn open_handle(&mut self) {
@@ -128,68 +141,39 @@ impl NetworkManager {
     }
 
     fn register_wlan_notification(&self) {
-        unsafe {
-            let result = WlanRegisterNotification
-            (
-                self.client_handle, 
-                WLAN_NOTIFICATION_SOURCE_ACM | WLAN_NOTIFICATION_SOURCE_MSM, 
-                false, 
-                Some(callbacks::wlan_acm_notification_callback), 
-                None, 
-                None, 
-                None
-            );
+        let handle = self.client_handle;
+        let sources = WLAN_NOTIFICATION_SOURCE_ACM | WLAN_NOTIFICATION_SOURCE_MSM;
 
-            match check_win32(result) {
-                Ok(_) => godot_print!("[WLAN] ACM Notification Callback Registered"),
-                Err(e) => godot_error!("[WLAN] ACM Notification Callback Registration Failed: {:?}", e),
-            }
-        }
+        wlan::register_notification(handle, sources, false, Some(callbacks::wlan_acm_notification_callback));
     }
 
     pub fn check_for_active_connection(&self) -> Option<&WLAN_CONNECTION_ATTRIBUTES> {
-        let mut data_size: u32 = 0;
-        let mut data_ptr: *mut c_void = null_mut();
+        let mut data_size = 0u32;
 
         let op_code = wlan_intf_opcode_current_connection;
         let mut op_type = wlan_opcode_value_type_query_only;
 
         let ifo = self.interface_info.as_ref().unwrap();
-        unsafe {
-            let query_result = WlanQueryInterface(
-                self.client_handle,
-                &ifo.InterfaceGuid,
-                op_code,
-                None,
-                &mut data_size,
-                &mut data_ptr,
-                Some(&mut op_type),
-            );
+        let client_handle = self.client_handle;
 
-            match check_win32(query_result) {
-                Ok(_) => Some(&*(data_ptr as *const WLAN_CONNECTION_ATTRIBUTES)),
-                Err(e) => {
-                    if e.0 == 5023 {
-                        godot_warn!("[WLAN] Interface Could Not Query For Active Connection. Are You Disconnected?");
-                        return None;
-                    }
-
-                    godot_error!("[WLAN] Error In Checking For Active Connection: {:?}", e);
-                    None
+        let query_result = match wlan::query_interface(client_handle, &ifo.InterfaceGuid, op_code, &mut data_size, &mut op_type) {
+            Ok(attribs) => attribs,
+            Err(error) => match error {
+                wlan::WlanError::Error(err) => {
+                    godot_error!("{}", err);
+                    return None;
                 },
-            }
-        }
-    }
-
-    pub fn check_for_windows_profiles(&self) -> Option<(String, bool)> {
-        let profiles = match self.get_profile_list() {
-            Some(list) => list,
-            None => {
-                godot_error!("[WLAN] Failed To Get Profile List");
-                return None;
+                wlan::WlanError::Win32Error(win32_error) => {
+                    godot_error!("[WLAN] Failed To Query Interface: {:?}", win32_error);
+                    return None;
+                },
             },
         };
 
+        query_result
+    }
+
+    pub fn check_for_windows_profiles(&self, profiles: &Vec<WLAN_PROFILE_INFO>) -> Option<(String, bool)> {
         let client_handle = self.client_handle;
         let guid = self.interface_info.unwrap().InterfaceGuid;
 
@@ -280,79 +264,21 @@ impl NetworkManager {
         };
     }
 
-    // ========================
-    // Purpose: Create a profile for an unknown network and connect to it
-    // ========================
-    // pub fn connect_to_unknown_network(&self, ssid: &str, password: &str) {
-    //     godot_print!("[WLAN] Connecting To Unknown Network: {}", ssid);
-
-    //     let connecting_network = self.networks.get(&ssid.to_string()).unwrap();
-    //     let profile = generate_network_profile_xml(ssid, password, &connecting_network.get_encryption(), &connecting_network.get_security());
-
-    //     let ifo = self.interface_info.as_ref().unwrap();
-    //     let profile = match convert_string_to_u16cstring(&profile) {
-    //         Some(string) => string,
-    //         None => return,
-    //     };
-
-    //     if let Err(error) = wlan::set_profile(self.client_handle, &ifo.InterfaceGuid, &profile, true) {
-    //         godot_error!("[WLAN] Failed To Set Network Profile: {:?}", error);
-    //         return;
-    //     }
-
-    //     let profile_name = match convert_str_to_u16cstring(ssid) {
-    //         Some(string) => string,
-    //         None => return,
-    //     };
-    //     let conn_params = WLAN_CONNECTION_PARAMETERS {
-    //         wlanConnectionMode: wlan_connection_mode_profile,
-    //         strProfile: PCWSTR::from_raw(profile_name.as_ptr()),
-    //         dot11BssType: dot11_BSS_type_infrastructure,
-    //         pDot11Ssid: null_mut(),
-    //         pDesiredBssidList: null_mut(),
-    //         dwFlags: 0
-    //     };
-
-    //     let ifo = self.interface_info.unwrap();
-    //     match wlan::connect(self.client_handle, &ifo.InterfaceGuid, &conn_params) {
-    //         Ok(_) => godot_print!("[WLAN] Connected to New Network: {}", ssid),
-    //         Err(e) => godot_error!("[WLAN] Failed to Connect to Network: {:?}", e),
-    //     }
-    // }
-
     pub fn disconnect_from_network(&self) {
         godot_print!("[WLAN] Disconnecting From Network");
         let ifo = self.interface_info.unwrap();
 
-        unsafe {
-            let result = WlanDisconnect
-            (
-                self.client_handle, 
-                &ifo.InterfaceGuid, 
-                None
-            );
-
-            match check_win32(result) {
-                Ok(_) => godot_print!("[WLAN] Disconnected From Network"),
-                Err(error) => godot_error!("[WLAN] Failed To Disconnect From Network: {:?}", error),
-            }
-        }
+        wlan::disconnect(self.client_handle, &ifo.InterfaceGuid);
     }
 
     pub fn fetch_network_data(&mut self) {
-        match self.scan_networks() {
-            Ok(()) => {},
-            Err(e) => {
-                godot_error!("[WLAN] Failed To Get Networks: {:?}", e);
-                return;
-            }
-        };
+        if let Err(e) = self.scan_networks() {
+            godot_error!("[WLAN] Failed To Get Networks: {:?}", e);
+            return;
+        }
     }
 
-    pub fn request_scan(&mut self) {
-        godot_print!("[WLAN] Requesting Scan");
-        self.open_handle();
-
+    pub fn initialize_interface_info(&mut self) {
         match self.interface_info {
             None => {
                 godot_warn!("[WLAN] No Interface Info. Retrieving.");
@@ -362,21 +288,14 @@ impl NetworkManager {
             }
             Some(_) => godot_print!("[WLAN] Interface Info Present. Proceeding."),
         }
+    }
 
-        let result = unsafe {
-            WlanScan(
-                self.client_handle,
-                &self.interface_info.unwrap().InterfaceGuid,
-                None,
-                None,
-                None
-            )
-        };
+    pub fn request_scan(&mut self) {
+        godot_print!("[WLAN] Requesting Scan");
+        let handle = self.client_handle;
+        let ifo = self.interface_info.unwrap().InterfaceGuid;
 
-        match check_win32(result) {
-            Ok(_) => godot_print!("[WLAN] Request Scan Ok"),
-            Err(e) => godot_error!("[WLAN] Request Scan Failed: {:?}", e)
-        }
+        wlan::scan(handle, &ifo);
     }
 
     pub fn refresh_networks(&mut self) {
@@ -467,9 +386,7 @@ impl NetworkManager {
 
 // Retrieval of data
 impl NetworkManager {
-    pub fn get_profile_list(&self) -> Option<Vec<WLAN_PROFILE_INFO>> {
-        let ifo = self.interface_info.as_ref().unwrap();
-
+    pub fn get_profile_list(&self, ifo: &WLAN_INTERFACE_INFO) -> Option<Vec<WLAN_PROFILE_INFO>> {
         let profile_list = match wlan::get_profile_list(self.client_handle, &ifo.InterfaceGuid) {
             Ok(result) => result,
             Err(error) => {
