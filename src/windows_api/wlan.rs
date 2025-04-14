@@ -1,19 +1,33 @@
 use godot::prelude::*;
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut};
 
 use widestring::{U16CString, U16String};
 use windows::Win32::Foundation::WIN32_ERROR;
-use windows::Win32::NetworkManagement::WiFi::{WlanConnect, WlanDeleteProfile, WlanDisconnect, WlanGetProfile, WlanGetProfileList, WlanQueryInterface, WlanReasonCodeToString, WlanRegisterNotification, WlanScan, WlanSetProfile, L2_NOTIFICATION_DATA, WLAN_CONNECTION_ATTRIBUTES, WLAN_CONNECTION_PARAMETERS, WLAN_INTF_OPCODE, WLAN_NOTIFICATION_SOURCES, WLAN_OPCODE_VALUE_TYPE};
+use windows::Win32::NetworkManagement::WiFi::*;
 use windows::Win32::{Foundation::HANDLE, NetworkManagement::WiFi::WLAN_PROFILE_INFO_LIST};
 use windows::core::{GUID, PCWSTR, PWSTR};
 
-use crate::windows_wlan::check_win32;
+use crate::utils::*;
 
 pub enum WlanError {
     Error(String),
     Win32Error(WIN32_ERROR)
+}
+
+impl WlanError {
+    pub fn check(&self, win32_string: &str) {
+        match self {
+            WlanError::Error(err) => godot_error!("{}", err),
+            WlanError::Win32Error(win32_error) => godot_print!("{}: {:?}", win32_string, win32_error),
+        }
+    }
+}
+
+pub enum WlanResult<T> {
+    Value(T),
+    Error(WlanError)
 }
 
 pub fn register_notification
@@ -43,6 +57,42 @@ pub fn scan(client_handle: HANDLE, interface_guid: &GUID) {
     } else {
         godot_print!("[WLAN] Scan Request Ok");
     }
+}
+
+pub fn enumerate_interfaces(client_handle: HANDLE) -> WlanResult<ManuallyDrop<Box<WLAN_INTERFACE_INFO_LIST>>> {
+    let mut interface_ptr: *mut WLAN_INTERFACE_INFO_LIST = null_mut();
+    
+    let result = unsafe {
+        WlanEnumInterfaces(client_handle, None, &mut interface_ptr)
+    };
+
+    if result != 0 {
+        return WlanResult::Error(WlanError::Win32Error(WIN32_ERROR(result)));
+    } else if interface_ptr.is_null() {
+        return WlanResult::Error(WlanError::Error("[SYSTEM] Interface Pointer Was Null".to_string()));
+    }
+
+    let interface_box = unsafe {
+        ManuallyDrop::new(Box::from_raw(interface_ptr))
+    };
+
+    WlanResult::Value(interface_box)
+}
+
+pub fn set_interface(client_handle: HANDLE, interface_guid: &GUID, opcode: WLAN_INTF_OPCODE, data_size: u32) {
+    let data: *const c_void = null();
+
+    let result = unsafe {
+        WlanSetInterface
+        (
+            client_handle, 
+            interface_guid, 
+            opcode, 
+            data_size, 
+            data, 
+            None
+        )
+    };
 }
 
 pub fn query_interface<'a>(

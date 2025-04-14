@@ -1,7 +1,7 @@
 use crate::globals;
 use crate::profile_management::generate_network_profile_xml;
 use crate::windows_api::{convert_string_to_u16cstring, convert_u16_slice_to_string, wlan};
-use crate::windows_wlan::NetworkManager;
+use crate::networking::NetworkManager;
 use crate::wlan_enums::{ConnectionNotifcation, NetworkSecurity, NotificationState, WlanInterfaceState};
 use godot::prelude::*;
 use std::fs::{create_dir_all, File};
@@ -91,7 +91,7 @@ impl WlanAPI {
         godot_print!("[WLAN] NetworkManager Ready");
         godot_print!("[WLAN] Scanning for Networks");
 
-        self.network_manager.fetch_network_data();
+        self.network_manager.refresh_networks();
         self.signals().network_data_fetched().emit();
     }
 
