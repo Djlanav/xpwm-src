@@ -2,6 +2,7 @@ pub mod connecting;
 pub mod scanning;
 pub mod profile_management;
 pub mod interface_management;
+pub mod adapter_checking;
 
 use std::{collections::HashMap, rc::Rc};
 use windows::Win32::Foundation::WIN32_ERROR;
